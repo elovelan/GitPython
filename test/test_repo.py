@@ -1125,6 +1125,45 @@ class TestRepo(TestBase):
         self.assertIsInstance(repo.heads["aaaaaaaa"], Head)
 
     @with_rw_directory
+    def test_git_work_tree_dotgit_relative_path(self, rw_dir):
+        """Check that a linked worktree whose .git file contains a relative
+        gitdir (as written by ``git worktree add`` with
+        ``worktree.useRelativePaths=true``, introduced in Git 2.48) is
+        resolved correctly."""
+        git = Git(rw_dir)
+        if git.version_info[:3] < (2, 5, 1):
+            raise RuntimeError("worktree feature unsupported (test needs git 2.5.1 or later)")
+
+        rw_master = self.rorepo.clone(join_path_native(rw_dir, "master_repo"))
+        branch = rw_master.create_head("cccccccc")
+        worktree_path = join_path_native(rw_dir, "worktree_repo")
+        if Git.is_cygwin():
+            worktree_path = cygpath(worktree_path)
+        rw_master.git.worktree("add", worktree_path, branch.name)
+
+        # Rewrite the worktree's .git file with a relative gitdir, simulating
+        # what Git 2.48+ produces with worktree.useRelativePaths=true. This
+        # lets us test the behavior even on older Git versions.
+        dotgit = osp.join(worktree_path, ".git")
+        with open(dotgit, "r") as f:
+            content = f.read()
+        prefix = "gitdir: "
+        assert content.startswith(prefix)
+        absolute_gitdir = content[len(prefix):].strip()
+        relative_gitdir = osp.relpath(absolute_gitdir, worktree_path)
+        with open(dotgit, "w") as f:
+            f.write("gitdir: %s\n" % relative_gitdir)
+
+        repo = Repo(worktree_path)
+        self.assertIsInstance(repo, Repo)
+        # Verify we can resolve refs (requires correct commondir resolution).
+        self.assertIsInstance(repo.head.commit, Object)
+        self.assertIsInstance(repo.heads["cccccccc"], Head)
+        # The git_dir should be an absolute path, even though the .git file
+        # contained a relative one.
+        self.assertTrue(osp.isabs(repo.git_dir))
+
+    @with_rw_directory
     def test_git_work_tree_env(self, rw_dir):
         """Check that we yield to GIT_WORK_TREE."""
         # Clone a repo.
